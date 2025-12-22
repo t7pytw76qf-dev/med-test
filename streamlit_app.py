@@ -107,7 +107,7 @@ elif st.session_state.page == "quiz":
                 st.session_state.current_step += 1; st.session_state.start_time = time.time(); st.rerun()
     else:
         st.success("השאלון הושלם!")
-        if st.button("קבל ניתוח אמינות ו-AI"):
+        if st.button("קבל ניתוח אמינות ו-AI", use_container_width=True):
             st.session_state.page = "analysis"; st.rerun()
 
 # --- דף ניתוח יחיד ---
@@ -117,9 +117,9 @@ elif st.session_state.page == "analysis":
         times = [a['time'] for a in st.session_state.answers]
         avg_time = sum(times) / len(times)
         
-        # פתרון לשגיאת ה-NotFound
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. תן חוות דעת מקצועית בעברית על אמינות ואישיות."
+        # עדכון שם מודל לגרסה היציבה
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. ספק חוות דעת מקצועית בעברית על אמינות ואישיות."
         
         try:
             resp = model.generate_content(prompt)
@@ -134,7 +134,7 @@ elif st.session_state.page == "analysis":
         except Exception as e:
             st.error(f"שגיאת AI: {e}")
 
-    if st.button("חזרה לתפריט"):
+    if st.button("חזרה לתפריט", use_container_width=True):
         st.session_state.page = "home"; st.rerun()
 
 # --- דף ארכיון וחוות דעת מצטברת ---
@@ -148,7 +148,7 @@ elif st.session_state.page == "archive":
             if st.button("גבש חוות דעת AI על כל ההיסטוריה", use_container_width=True):
                 with st.spinner("מנתח את כל המבחנים שלך..."):
                     history = "\n".join([f"תאריך: {d.to_dict()['date']}, ניתוח: {d.to_dict()['analysis']}" for d in docs])
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
                     agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. ספק חוות דעת מצטברת בעברית על המגמות שלו, עקביות התשובות לאורך זמן והמלצות לשיפור לקראת מבחני מס\"ר:\n\n{history}"
                     agg_resp = model.generate_content(agg_prompt)
                     st.markdown("### 🤖 חוות דעת תקופתית")
@@ -161,11 +161,11 @@ elif st.session_state.page == "archive":
                 with st.expander(f"מבחן מיום {d['date']}"):
                     st.write(d['analysis'])
         else:
-            st.info("לא נמצאו מבחנים קודמים.")
+            st.info("לא נמצאו מבחנים קודמים למשתמש זה.")
     else:
         st.error("הארכיון לא זמין.")
     
-    if st.button("חזרה"):
+    if st.button("חזרה לתפריט", use_container_width=True):
         st.session_state.page = "home"; st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
