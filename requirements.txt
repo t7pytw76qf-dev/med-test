@@ -1,4 +1,4 @@
+google-generativeai>=0.8.3
 streamlit
 pandas
-google-generativeai
 firebase-admin
