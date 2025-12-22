@@ -117,12 +117,12 @@ elif st.session_state.page == "analysis":
         times = [a['time'] for a in st.session_state.answers]
         avg_time = sum(times) / len(times)
         
-        # עדכון שם מודל לגרסה היציבה
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. ספק חוות דעת מקצועית בעברית על אמינות ואישיות."
-        
+        # שימוש בשם מודל פשוט ובסיסי
         try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. ספק חוות דעת מקצועית בעברית על אמינות ואישיות."
             resp = model.generate_content(prompt)
+            
             st.info(f"⏱️ זמן תגובה ממוצע: {avg_time:.2f} שניות.")
             st.markdown(resp.text)
             
@@ -133,6 +133,14 @@ elif st.session_state.page == "analysis":
                 })
         except Exception as e:
             st.error(f"שגיאת AI: {e}")
+            st.write("מנסה גרסה חלופית...")
+            # ניסיון אחרון עם מודל פרו
+            try:
+                model_alt = genai.GenerativeModel('gemini-1.5-pro')
+                resp = model_alt.generate_content(prompt)
+                st.markdown(resp.text)
+            except:
+                st.error("לא ניתן להתחבר ל-AI כרגע. בדוק את ה-API Key ב-Secrets.")
 
     if st.button("חזרה לתפריט", use_container_width=True):
         st.session_state.page = "home"; st.rerun()
@@ -148,7 +156,7 @@ elif st.session_state.page == "archive":
             if st.button("גבש חוות דעת AI על כל ההיסטוריה", use_container_width=True):
                 with st.spinner("מנתח את כל המבחנים שלך..."):
                     history = "\n".join([f"תאריך: {d.to_dict()['date']}, ניתוח: {d.to_dict()['analysis']}" for d in docs])
-                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. ספק חוות דעת מצטברת בעברית על המגמות שלו, עקביות התשובות לאורך זמן והמלצות לשיפור לקראת מבחני מס\"ר:\n\n{history}"
                     agg_resp = model.generate_content(agg_prompt)
                     st.markdown("### 🤖 חוות דעת תקופתית")
