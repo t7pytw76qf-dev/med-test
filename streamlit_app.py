@@ -9,15 +9,12 @@ from firebase_admin import credentials, firestore
 import os
 from fpdf import FPDF
 
-# --- 1. הגדרות דף ועיצוב מוטמע (תיקון כפתורים וצבעים) ---
+# --- 1. עיצוב ו-RTL ---
 st.set_page_config(page_title="מערכת HEXACO", layout="centered")
 
 st.markdown("""
     <style>
-        /* הגדרת כיווניות לימין */
         .main .block-container { direction: rtl !important; text-align: right !important; }
-
-        /* עיצוב כפתורי הדירוג 1-5 - תיקון גודל */
         .stButton > button {
             width: 100% !important;
             height: 4em !important;
@@ -30,17 +27,10 @@ st.markdown("""
             transition: all 0.2s ease !important;
             margin-bottom: 10px !important;
         }
-
-        /* צביעת הכפתור בכחול בעת לחיצה (Focus/Active) */
-        .stButton > button:active, 
-        .stButton > button:focus,
-        .stButton > button:hover {
+        .stButton > button:active, .stButton > button:focus, .stButton > button:hover {
             background-color: #4A90E2 !important;
             color: white !important;
-            border: 2px solid #225796 !important;
         }
-
-        /* פוטר קבוע */
         .custom-footer { 
             position: fixed; left: 0; bottom: 0; width: 100%; 
             background-color: white; text-align: center; padding: 10px; 
@@ -49,7 +39,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. פונקציית PDF בסיסית ---
+# --- 2. פונקציית PDF ---
 def create_pdf(text, user_name):
     try:
         pdf = FPDF()
@@ -62,10 +52,7 @@ def create_pdf(text, user_name):
         return pdf.output(dest='S').encode('latin-1')
     except: return b""
 
-# --- 3. אתחול מפתחות ---
-if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-
+# --- 3. אתחול Firebase ---
 fb_status = False
 if "firebase" in st.secrets:
     try:
@@ -78,24 +65,32 @@ if "firebase" in st.secrets:
         fb_status = True
     except: pass
 
-# --- 4. מנגנון AI משולש ---
+# --- 4. מנגנון AI עם סבב מפתחות (Key Rotation) ---
 def generate_analysis(answers):
+    # רשימת מפתחות מה-Secrets
+    api_keys = [st.secrets.get("GEMINI_API_KEY"), st.secrets.get("GEMINI_API_KEY_2")]
+    api_keys = [k for k in api_keys if k] # סינון מפתחות ריקים
+    
     models = ["models/gemini-1.5-flash", "models/gemini-1.5-flash-8b", "models/gemini-1.5-pro"]
     simplified_data = [{"trait": a['trait'], "score": a['score'], "time": a['time']} for a in answers]
-    prompt = f"Analyze medical candidate {st.session_state.user_name}. Data: {simplified_data}. Answer in Hebrew about reliability, traits and suitability."
-    
-    for model_name in models:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text, model_name
-        except: continue
-    return "שגיאת מכסה. נסה שוב בעוד דקה.", None
+    prompt = f"Analyze medical candidate {st.session_state.user_name}. Data: {simplified_data}. Answer in Hebrew."
 
-# --- 5. ניהול דפים ---
+    for key in api_keys:
+        genai.configure(api_key=key) # מגדיר את המפתח הנוכחי
+        for model_name in models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                return response.text, model_name
+            except Exception as e:
+                if "429" in str(e): # אם המפתח הזה חסום, ננסה את המפתח הבא ברשימה
+                    continue 
+                continue
+    return "כל המפתחות וכל המודלים חרגו מהמכסה. נסה שוב בעוד דקה.", None
+
+# --- 5. לוגיקת דפים ---
 if 'page' not in st.session_state: st.session_state.page = "home"
 
-# דף הבית
 if st.session_state.page == "home":
     st.title("🏥 מערכת סימולציות HEXACO")
     user_name = st.text_input("שם משתמש:", key="main_user_input")
@@ -118,7 +113,6 @@ if st.session_state.page == "home":
     if st.button("📂 ארכיון תוצאות"):
         if user_name: st.session_state.user_name = user_name; st.session_state.page = "archive"; st.rerun()
 
-# דף השאלון
 elif st.session_state.page == "quiz":
     q = st.session_state.questions
     idx = st.session_state.current_step
@@ -126,8 +120,6 @@ elif st.session_state.page == "quiz":
         st.write(f"שאלה {idx + 1} מתוך {len(q)}")
         st.progress((idx + 1) / len(q))
         st.markdown(f"### {q[idx]['q']}")
-        
-        # יצירת כפתורים גדולים
         cols = st.columns(5)
         for val, col in enumerate(cols, 1):
             if col.button(str(val), key=f"q_btn_{idx}_{val}"):
@@ -135,14 +127,12 @@ elif st.session_state.page == "quiz":
                 st.session_state.answers.append({"trait": q[idx]['trait'], "score": val, "time": duration})
                 st.session_state.current_step += 1; st.session_state.start_time = time.time(); st.rerun()
     else:
-        st.success("השאלון הושלם!")
         if st.button("לחץ לקבלת ניתוח AI"): st.session_state.page = "analysis"; st.rerun()
 
-# דף ניתוח
 elif st.session_state.page == "analysis":
     st.title("🧐 ניתוח AI")
     if 'final_analysis' not in st.session_state:
-        with st.spinner("מנתח..."):
+        with st.spinner("מנתח עם מספר מפתחות לגיבוי..."):
             text, model = generate_analysis(st.session_state.answers)
             st.session_state.final_analysis = text
             if fb_status and model:
@@ -153,13 +143,11 @@ elif st.session_state.page == "analysis":
     st.markdown(st.session_state.final_analysis)
     pdf_bytes = create_pdf(st.session_state.final_analysis, st.session_state.user_name)
     if pdf_bytes:
-        st.download_button("📥 הורד ניתוח כ-PDF (English Header)", data=pdf_bytes, file_name="analysis.pdf", mime="application/pdf")
-    
+        st.download_button("📥 הורד PDF", data=pdf_bytes, file_name="analysis.pdf", mime="application/pdf")
     if st.button("חזרה לתפריט"):
         if 'final_analysis' in st.session_state: del st.session_state.final_analysis
         st.session_state.page = "home"; st.rerun()
 
-# דף ארכיון
 elif st.session_state.page == "archive":
     st.title(f"📂 ארכיון: {st.session_state.user_name}")
     if fb_status:
