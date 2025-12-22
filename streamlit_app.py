@@ -7,7 +7,19 @@ from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- 1. אתחול Firebase ---
+# --- 1. הגדרת Gemini (מפתח וחיפוש מודל) ---
+API_KEY = "AIzaSyDnYMJpJkNcXpOT8TgqPe6ymyvZxnWGCBo"
+genai.configure(api_key=API_KEY)
+
+def get_working_model():
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                if '1.5-flash' in m.name: return m.name
+        return 'gemini-1.5-flash'
+    except: return 'gemini-1.5-flash'
+
+# --- 2. אתחול Firebase ---
 if 'db' not in st.session_state:
     st.session_state.db = None
     st.session_state.fb_status = False
@@ -21,31 +33,36 @@ if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
             st.session_state.db = firestore.client()
             st.session_state.fb_status = True
-    except Exception as e:
-        st.info("מערכת הארכיון תופעל לאחר הגדרת Secrets.")
+    except: pass
 
 db = st.session_state.db
 
-# --- 2. הגדרת Gemini ---
-GEMINI_API_KEY = "AIzaSyDnYMJpJkNcXpOT8TgqPe6ymyvZxnWGCBo"
-genai.configure(api_key=GEMINI_API_KEY)
-
-# --- 3. עיצוב (CSS) - RTL וזכויות יוצרים במרכז ---
+# --- 3. עיצוב CSS (ניקוי סמלים, RTL ומרכוז פוטר) ---
 st.markdown("""
     <style>
+    /* הסתרת אלמנטים של Streamlit */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    div[data-testid="stStatusWidget"] {visibility: hidden;}
+    
+    /* הגדרת RTL ויישור לימין */
     .main .block-container { direction: rtl; text-align: right; }
-    div.stButton > button:active { background-color: #4CAF50 !important; color: white !important; }
-    .footer {
+    
+    /* עיצוב שורת זכויות יוצרים ממורכזת */
+    .custom-footer {
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #f8f9fa; color: #333; text-align: center;
         padding: 10px; font-weight: bold; font-size: 14px;
         border-top: 2px solid #007bff; z-index: 1000;
+        direction: ltr; 
     }
     .main-content { margin-bottom: 80px; }
     h1, h2, h3, p, span { text-align: right; }
     </style>
 """, unsafe_allow_html=True)
 
+# --- פונקציות עזר ---
 def load_quiz(amount):
     try:
         df = pd.read_csv("questions.csv")
@@ -90,7 +107,6 @@ if st.session_state.page == "home":
     if st.button("📂 ארכיון וחוות דעת מצטברת", use_container_width=True):
         if st.session_state.user_name:
             st.session_state.page = "archive"; st.rerun()
-        else: st.warning("נא להזין שם משתמש")
 
 # --- דף השאלון ---
 elif st.session_state.page == "quiz":
@@ -107,74 +123,53 @@ elif st.session_state.page == "quiz":
                 st.session_state.current_step += 1; st.session_state.start_time = time.time(); st.rerun()
     else:
         st.success("השאלון הושלם!")
-        if st.button("קבל ניתוח אמינות ו-AI", use_container_width=True):
+        if st.button("נתח תוצאות ושלח ל-AI", use_container_width=True):
             st.session_state.page = "analysis"; st.rerun()
 
 # --- דף ניתוח יחיד ---
 elif st.session_state.page == "analysis":
     st.title("🧐 ניתוח אמינות ואישיות")
-    with st.spinner("ה-AI מנתח..."):
-        times = [a['time'] for a in st.session_state.answers]
-        avg_time = sum(times) / len(times)
-        
-        # שימוש בשם מודל פשוט ובסיסי
+    with st.spinner("ה-AI מנתח את התוצאות..."):
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. ספק חוות דעת מקצועית בעברית על אמינות ואישיות."
+            model_name = get_working_model()
+            model = genai.GenerativeModel(model_name)
+            prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. תן חוות דעת בעברית על אמינות ואישיות HEXACO."
             resp = model.generate_content(prompt)
-            
-            st.info(f"⏱️ זמן תגובה ממוצע: {avg_time:.2f} שניות.")
             st.markdown(resp.text)
             
             if st.session_state.fb_status and db:
                 db.collection('results').add({
                     'user': st.session_state.user_name, 'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    'analysis': resp.text, 'avg_time': avg_time
+                    'analysis': resp.text
                 })
         except Exception as e:
-            st.error(f"שגיאת AI: {e}")
-            st.write("מנסה גרסה חלופית...")
-            # ניסיון אחרון עם מודל פרו
-            try:
-                model_alt = genai.GenerativeModel('gemini-1.5-pro')
-                resp = model_alt.generate_content(prompt)
-                st.markdown(resp.text)
-            except:
-                st.error("לא ניתן להתחבר ל-AI כרגע. בדוק את ה-API Key ב-Secrets.")
-
+            st.error(f"שגיאה בניתוח: {e}")
     if st.button("חזרה לתפריט", use_container_width=True):
         st.session_state.page = "home"; st.rerun()
 
 # --- דף ארכיון וחוות דעת מצטברת ---
 elif st.session_state.page == "archive":
-    st.title(f"📂 חוות דעת מצטברת: {st.session_state.user_name}")
-    
+    st.title(f"📂 היסטוריה עבור: {st.session_state.user_name}")
     if st.session_state.fb_status and db:
         docs = list(db.collection('results').where('user', '==', st.session_state.user_name).stream())
-        
         if docs:
-            if st.button("גבש חוות דעת AI על כל ההיסטוריה", use_container_width=True):
-                with st.spinner("מנתח את כל המבחנים שלך..."):
+            if st.button("גבש חוות דעת AI מצטברת", use_container_width=True):
+                with st.spinner("מנתח מגמות..."):
                     history = "\n".join([f"תאריך: {d.to_dict()['date']}, ניתוח: {d.to_dict()['analysis']}" for d in docs])
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. ספק חוות דעת מצטברת בעברית על המגמות שלו, עקביות התשובות לאורך זמן והמלצות לשיפור לקראת מבחני מס\"ר:\n\n{history}"
+                    model = genai.GenerativeModel(get_working_model())
+                    agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. כתוב חוות דעת בעברית על מגמות ושיפורים:\n\n{history}"
                     agg_resp = model.generate_content(agg_prompt)
-                    st.markdown("### 🤖 חוות דעת תקופתית")
                     st.info(agg_resp.text)
-                    st.divider()
 
             st.subheader("📜 מבחנים קודמים")
             for doc in docs:
                 d = doc.to_dict()
                 with st.expander(f"מבחן מיום {d['date']}"):
                     st.write(d['analysis'])
-        else:
-            st.info("לא נמצאו מבחנים קודמים למשתמש זה.")
-    else:
-        st.error("הארכיון לא זמין.")
-    
-    if st.button("חזרה לתפריט", use_container_width=True):
+        else: st.info("לא נמצאו נתונים קודמים.")
+    else: st.error("הארכיון דורש הגדרת Secrets.")
+    if st.button("חזרה", use_container_width=True):
         st.session_state.page = "home"; st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
-st.markdown('<div class="footer">© כל הזכויות שמורות לניתאי מלכה</div>', unsafe_allow_html=True)
+st.markdown('<div class="custom-footer">© כל הזכויות שמורות לניתאי מלכה</div>', unsafe_allow_html=True)
