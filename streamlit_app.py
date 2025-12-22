@@ -9,12 +9,12 @@ from firebase_admin import credentials, firestore
 import os
 from fpdf import FPDF
 
-# --- 1. עיצוב ממשק: RTL, כפתורים כחולים וגדולים ---
-st.set_page_config(page_title="מערכת HEXACO - ניתוח מס"ר", layout="centered")
+# --- 1. הגדרות דף ועיצוב (CSS) ---
+st.set_page_config(page_title="מערכת HEXACO - בודק מס"ר", layout="centered")
 
 st.markdown("""
     <style>
-        /* יישור לימין */
+        /* יישור RTL לכל האפליקציה */
         .main .block-container { direction: rtl !important; text-align: right !important; }
         
         /* עיצוב כפתורי הדירוג 1-5 */
@@ -31,7 +31,7 @@ st.markdown("""
             margin-bottom: 10px !important;
         }
 
-        /* צביעה בכחול בעת לחיצה ופוקוס */
+        /* צביעה בכחול בעת לחיצה (Active) ובעת פוקוס (Focus) */
         div.stButton > button:active {
             background-color: #4A90E2 !important;
             color: white !important;
@@ -44,7 +44,10 @@ st.markdown("""
             border: 2px solid #1a4373 !important;
         }
 
-        /* פוטר קבוע */
+        /* עיצוב התראות */
+        .stAlert { direction: rtl !important; text-align: right !important; }
+
+        /* פוטר קבוע בתחתית */
         .custom-footer { 
             position: fixed; left: 0; bottom: 0; width: 100%; 
             background-color: white; text-align: center; padding: 10px; 
@@ -53,7 +56,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. פונקציית PDF (תומכת אנגלית/לטינית למניעת שגיאות פתיחה) ---
+# --- 2. פונקציית יצירת PDF ---
 def create_pdf(text, user_name):
     try:
         pdf = FPDF()
@@ -61,10 +64,12 @@ def create_pdf(text, user_name):
         pdf.set_font("Arial", size=12)
         pdf.cell(200, 10, txt=f"HEXACO Medical Analysis - {user_name}", ln=True, align='C')
         pdf.ln(10)
+        # ניקוי תווים שאינם לטיניים למניעת קריסת ה-PDF (התוכן בעברית יוצג ב-Streamlit)
         clean_text = text.encode('ascii', 'ignore').decode('ascii')
         pdf.multi_cell(0, 10, txt=clean_text)
         return pdf.output(dest='S').encode('latin-1')
-    except: return b""
+    except:
+        return b""
 
 # --- 3. אתחול Firebase ---
 if "firebase" in st.secrets and not firebase_admin._apps:
@@ -73,24 +78,27 @@ if "firebase" in st.secrets and not firebase_admin._apps:
         fb_dict["private_key"] = fb_dict["private_key"].replace('\\n', '\n')
         cred = credentials.Certificate(fb_dict)
         firebase_admin.initialize_app(cred)
-    except: pass
+    except Exception as e:
+        st.error(f"שגיאה באתחול Firebase: {e}")
+
 db = firestore.client() if firebase_admin._apps else None
 
-# --- 4. מנגנון AI בודק מס"ר (סבב מפתחות + מודלים) ---
+# --- 4. מנגנון AI (סבב מפתחות וניתוח מס"ר) ---
 def generate_analysis(answers):
+    # משיכת מפתחות מה-Secrets
     keys = [st.secrets.get("GEMINI_API_KEY"), st.secrets.get("GEMINI_API_KEY_2")]
     keys = [k for k in keys if k]
     models = ["models/gemini-1.5-flash", "models/gemini-1.5-flash-8b", "models/gemini-1.5-pro"]
     
     prompt = f"""
-    You are a professional assessor for MSR (Medical Simulation Center) entrance exams for Medical School.
-    Analyze candidate {st.session_state.user_name} based on these HEXACO results:
-    {answers}
+    אתה בודק מקצועי במרכז מס"ר (סימולציות רפואיות) בישראל.
+    נתח את המועמד/ת {st.session_state.user_name} על סמך מבחן HEXACO.
+    נתונים (תכונה, ציון 1-5, זמן תגובה בשניות): {answers}
     
-    Provide a detailed report in Hebrew:
-    1. Reliability Assessment: Evaluate honesty based on response times and consistency.
-    2. Deep Character Analysis: Based on the 6 HEXACO traits.
-    3. Medical School Fit: Final verdict on suitability for a medical career in Israel.
+    כתוב דוח מפורט בעברית הכולל:
+    1. הערכת אמינות: האם זמני התגובה מעידים על כנות או על ניסיון להשיב תשובות רצויות?
+    2. ניתוח תכונות אישיות: פירוט על פי 6 המדדים.
+    3. התאמה ללימודי רפואה: חוות דעת סופית על התאמת המועמד למקצוע הרפואה.
     """
 
     for k in keys:
@@ -100,41 +108,57 @@ def generate_analysis(answers):
                 model = genai.GenerativeModel(m)
                 response = model.generate_content(prompt)
                 return response.text, m
-            except: continue
-    return "שגיאת מכסה בכל המפתחות. המתן דקה ונסה שוב.", None
+            except:
+                continue
+    return "שגיאה: כל מכסות ה-API נוצלו. נסה שוב בעוד דקה.", None
 
-# --- 5. לוגיקת דפים ---
+# --- 5. ניהול דפי האפליקציה ---
 if 'page' not in st.session_state: st.session_state.page = "home"
 if 'user_name' not in st.session_state: st.session_state.user_name = ""
 
-# דף הבית
+# --- דף הבית ---
 if st.session_state.page == "home":
-    st.title("🏥 מערכת סימולציות HEXACO לבודקי מס\"ר")
-    st.session_state.user_name = st.text_input("שם מועמד:", value=st.session_state.user_name)
+    st.title("🏥 מערכת סימולציות HEXACO - הכנה למס\"ר")
+    st.write("ברוכים הבאים למערכת הניתוח המקצועית עבור מועמדי רפואה.")
+    
+    st.session_state.user_name = st.text_input("הזן שם מועמד מלא:", value=st.session_state.user_name)
     
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📝 שאלון מלא (200)"):
             if st.session_state.user_name:
-                st.session_state.questions = pd.read_csv("questions.csv").to_dict('records')
-                st.session_state.current_step = 0; st.session_state.answers = []
-                st.session_state.start_time = time.time(); st.session_state.page = "quiz"; st.rerun()
+                try:
+                    st.session_state.questions = pd.read_csv("questions.csv").to_dict('records')
+                    st.session_state.current_step = 0
+                    st.session_state.answers = []
+                    st.session_state.start_time = time.time()
+                    st.session_state.page = "quiz"
+                    st.rerun()
+                except: st.error("קובץ questions.csv חסר בשרת!")
             else: st.error("⚠️ נא להזין שם מועמד!")
+    
     with col2:
         if st.button("⏱️ מקבץ מהיר (36)"):
             if st.session_state.user_name:
-                df = pd.read_csv("questions.csv")
-                st.session_state.questions = df.sample(n=min(36, len(df))).to_dict('records')
-                st.session_state.current_step = 0; st.session_state.answers = []
-                st.session_state.start_time = time.time(); st.session_state.page = "quiz"; st.rerun()
+                try:
+                    df = pd.read_csv("questions.csv")
+                    st.session_state.questions = df.sample(n=min(36, len(df))).to_dict('records')
+                    st.session_state.current_step = 0
+                    st.session_state.answers = []
+                    st.session_state.start_time = time.time()
+                    st.session_state.page = "quiz"
+                    st.rerun()
+                except: st.error("קובץ questions.csv חסר בשרת!")
             else: st.error("⚠️ נא להזין שם מועמד!")
 
     st.write("---")
     if st.button("📂 ארכיון תוצאות מס\"ר"):
-        if st.session_state.user_name: st.session_state.page = "archive"; st.rerun()
+        if st.session_state.user_name:
+            st.session_state.page = "archive"
+            st.rerun()
         else: st.warning("הזן שם כדי לצפות בהיסטוריה")
 
-# דף השאלון
+# --- דף השאלון ---
 elif st.session_state.page == "quiz":
     q = st.session_state.questions
     idx = st.session_state.current_step
@@ -145,47 +169,74 @@ elif st.session_state.page == "quiz":
         st.markdown(f"### {q[idx]['q']}")
         
         cols = st.columns(5)
+        labels = ["בכלל לא", "מעט", "בינוני", "די הרבה", "במידה רבה"]
         for val, col in enumerate(cols, 1):
             if col.button(str(val), key=f"btn_{idx}_{val}"):
                 duration = round(time.time() - st.session_state.start_time, 2)
-                st.session_state.answers.append({"trait": q[idx]['trait'], "score": val, "time": duration})
-                st.session_state.current_step += 1; st.session_state.start_time = time.time(); st.rerun()
+                st.session_state.answers.append({
+                    "trait": q[idx]['trait'], 
+                    "score": val, 
+                    "time": duration
+                })
+                st.session_state.current_step += 1
+                st.session_state.start_time = time.time()
+                st.rerun()
     else:
         st.balloons()
-        st.success("✅ השאלון הושלם! הנתונים מוכנים לעיבוד בודק מס\"ר.")
-        if st.button("🚀 הפק ניתוח בודק מס\"ר"): st.session_state.page = "analysis"; st.rerun()
+        st.success("✅ השאלון הושלם! הנתונים נאספו עבור בודק מס\"ר.")
+        if st.button("🚀 הפק ניתוח אישי עכשיו"):
+            st.session_state.page = "analysis"
+            st.rerun()
 
-# דף ניתוח
+# --- דף ניתוח התוצאות ---
 elif st.session_state.page == "analysis":
-    st.title("🧐 ניתוח מודל מס\"ר")
+    st.title("🧐 דוח בודק מס\"ר")
+    
     if 'final_analysis' not in st.session_state:
-        with st.spinner("ה-AI בתפקיד בודק מס\"ר מנתח נתונים..."):
+        with st.spinner("ה-AI מנתח את הפרופיל שלך..."):
             text, model = generate_analysis(st.session_state.answers)
             st.session_state.final_analysis = text
-            if db:
-                db.collection('results').add({
-                    'user': st.session_state.user_name, 
-                    'date': datetime.now().strftime("%d/%m/%Y %H:%M"), 
-                    'analysis': text
-                })
+            # שמירה ל-Firebase
+            if db and model:
+                try:
+                    db.collection('results').add({
+                        'user': st.session_state.user_name,
+                        'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        'analysis': text
+                    })
+                except: pass
     
     st.markdown(st.session_state.final_analysis)
     
-    pdf_b = create_pdf(st.session_state.final_analysis, st.session_state.user_name)
-    if pdf_b: st.download_button("📥 הורד דוח PDF (English Header)", data=pdf_b, file_name=f"MSR_{st.session_state.user_name}.pdf")
+    # הורדת PDF
+    pdf_bytes = create_pdf(st.session_state.final_analysis, st.session_state.user_name)
+    if pdf_bytes:
+        st.download_button("📥 הורד ניתוח כ-PDF", data=pdf_bytes, file_name=f"Analysis_{st.session_state.user_name}.pdf")
     
-    if st.button("חזרה לתפריט ראשי"): 
+    if st.button("חזרה לתפריט ראשי"):
         if 'final_analysis' in st.session_state: del st.session_state.final_analysis
-        st.session_state.page = "home"; st.rerun()
+        st.session_state.page = "home"
+        st.rerun()
 
-# דף ארכיון
+# --- דף ארכיון ---
 elif st.session_state.page == "archive":
     st.title(f"📂 ארכיון עבור: {st.session_state.user_name}")
     if db:
-        docs = db.collection('results').where('user', '==', st.session_state.user_name).stream()
-        for doc in docs:
-            d = doc.to_dict()
-            with st.expander(f"דוח מתאריך {d['date']}"): st.write(d['analysis'])
-    if st.button("חזרה"): st.session_state.page = "home"; st.rerun()
+        try:
+            docs = db.collection('results').where('user', '==', st.session_state.user_name).stream()
+            found = False
+            for doc in docs:
+                found = True
+                d = doc.to_dict()
+                with st.expander(f"דוח מתאריך {d['date']}"):
+                    st.write(d['analysis'])
+            if not found:
+                st.info("לא נמצאו תוצאות קודמות לשם זה.")
+        except:
+            st.error("שגיאת הרשאה בבסיס הנתונים. וודא שהגדרת Rules כ-True.")
+    
+    if st.button("חזרה"):
+        st.session_state.page = "home"
+        st.rerun()
 
 st.markdown('<div class="custom-footer">© כל הזכויות שמורות לניתאי מלכה</div>', unsafe_allow_html=True)
