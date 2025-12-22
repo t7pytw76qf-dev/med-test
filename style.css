@@ -1,11 +1,11 @@
-/* הסתרת אלמנטים של Streamlit ו-GitHub */
+/* הסתרת אלמנטים של Streamlit */
 #MainMenu {visibility: hidden;}
 header {visibility: hidden;}
 footer {visibility: hidden;}
 [data-testid="stDecoration"] {display: none;}
 div[data-testid="stStatusWidget"] {visibility: hidden;}
 
-/* הגדרת RTL ומרכוז תוכן */
+/* הגדרת RTL ומרכוז */
 .main .block-container { 
     direction: rtl !important; 
     text-align: right !important; 
@@ -14,7 +14,7 @@ div[data-testid="stStatusWidget"] {visibility: hidden;}
     margin: 0 auto;
 }
 
-/* כפתורי הספרות (1-5) - רחבים וגדולים */
+/* כפתורי 1-5 רחבים וגדולים */
 div[data-testid="column"] button {
     width: 100% !important;
     height: 5em !important;
@@ -23,26 +23,13 @@ div[data-testid="column"] button {
     border-radius: 15px !important;
     background-color: #f8f9fa !important;
     border: 2px solid #4A90E2 !important;
-    margin-top: 10px !important;
 }
 
-/* כפתורי התפריט הראשי */
+/* כפתורי תפריט ראשי */
 .stButton > button {
     width: 100% !important;
     height: 4em !important;
     border-radius: 12px !important;
     font-weight: bold !important;
     font-size: 18px !important;
-    margin-bottom: 15px !important;
-}
-
-/* תיקון הזנת טקסט */
-input { text-align: right !important; direction: rtl !important; }
-
-/* פוטר זכויות יוצרים */
-.custom-footer {
-    position: fixed; left: 0; bottom: 0; width: 100%;
-    background-color: white; color: #333; text-align: center;
-    padding: 10px; font-weight: bold; font-size: 13px;
-    border-top: 1px solid #eaeaea; z-index: 1000;
 }
