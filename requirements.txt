@@ -1,4 +1,4 @@
-gostreamlit
+streamlit
 pandas
 google-generativeai
 firebase-admin
