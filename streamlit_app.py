@@ -8,193 +8,153 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. טעינת עיצוב חיצוני (Style.css) ---
-def local_css(file_name):
-    if os.path.exists(file_name):
-        with open(file_name) as f:
-            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-    else:
-        # גיבוי עיצוב בסיסי אם הקובץ חסר
-        st.markdown("""<style>
-            .main { direction: rtl; text-align: right; }
-            .stButton>button { width: 100%; height: 3em; border-radius: 10px; }
-        </style>""", unsafe_allow_html=True)
+# --- 1. טעינת עיצוב ---
+if os.path.exists("style.css"):
+    with open("style.css") as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-local_css("style.css")
-
-# --- 2. הגדרת Gemini בצורה מאובטחת ---
+# --- 2. אתחול Gemini ו-Firebase מה-Secrets ---
 try:
-    # משיכת המפתח מה-Secrets של Streamlit
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=API_KEY)
-except:
-    st.error("שגיאה: מפתח ה-API לא נמצא ב-Secrets. אנא הגדר GEMINI_API_KEY.")
-    st.stop()
-
-def get_working_model():
-    """מאתר מודל זמין למניעת שגיאת 404"""
-    try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for name in available:
-            if '1.5-flash' in name: return name
-        return available[0] if available else 'models/gemini-1.5-flash'
-    except:
-        return 'models/gemini-1.5-flash'
-
-# --- 3. אתחול Firebase (ארכיון) ---
-if 'db' not in st.session_state:
-    st.session_state.db = None
-    st.session_state.fb_status = False
-
-if not firebase_admin._apps:
-    try:
-        if "firebase" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    fb_status = False
+    if "firebase" in st.secrets:
+        if not firebase_admin._apps:
             fb_dict = dict(st.secrets["firebase"])
             fb_dict["private_key"] = fb_dict["private_key"].replace('\\n', '\n')
             cred = credentials.Certificate(fb_dict)
             firebase_admin.initialize_app(cred)
-            st.session_state.db = firestore.client()
-            st.session_state.fb_status = True
-    except Exception as e:
-        pass # הארכיון פשוט לא יפעל אם אין הגדרות
+        db = firestore.client()
+        fb_status = True
+except Exception as e:
+    st.error(f"שגיאה באתחול המערכת: {e}")
 
-# --- 4. פונקציות עזר לשאלון ---
+# --- 3. פונקציות עזר ---
 def load_quiz(amount):
     try:
         df = pd.read_csv("questions.csv")
-        # נוודא שהשאלות כוללות את המילים המיוחדות שלך gnarled, emits, clenched אם הן בקובץ
         traits = df['trait'].unique()
-        q_per_trait = amount // len(traits)
-        final_quiz = []
-        for trait in traits:
-            pool = df[df['trait'] == trait].to_dict('records')
-            final_quiz.extend(random.sample(pool, min(q_per_trait, len(pool))))
-        random.shuffle(final_quiz)
-        return final_quiz
-    except:
-        st.error("קובץ questions.csv חסר ב-GitHub.")
-        return []
+        q_per_trait = max(1, amount // len(traits))
+        quiz = []
+        for t in traits:
+            pool = df[df['trait'] == t].to_dict('records')
+            quiz.extend(random.sample(pool, min(q_per_trait, len(pool))))
+        random.shuffle(quiz)
+        return quiz[:amount]
+    except: return []
 
-# --- 5. ניהול מצב (Session State) ---
-if 'page' not in st.session_state:
-    st.session_state.page = "home"
-    st.session_state.user_name = ""
+# ניהול מצבי עמוד
+if 'page' not in st.session_state: st.session_state.page = "home"
 
-# --- 6. דפי האפליקציה ---
-
-# --- דף הבית ---
+# --- 4. דף הבית ---
 if st.session_state.page == "home":
     st.title("🏥 מערכת סימולציות HEXACO")
-    st.write("ברוך הבא למערכת תרגול אמינות ואישיות.")
-    
-    st.session_state.user_name = st.text_input("הזן שם משתמש (לשמירת תוצאות):", value=st.session_state.user_name)
+    user_name = st.text_input("הזן שם משתמש:", key="input_user")
     
     st.write("### בחר מסלול תרגול:")
+    col1, col2 = st.columns(2)
     
-    if st.button("📝 שאלון מלא (200 שאלות)"):
-        if st.session_state.user_name:
-            st.session_state.questions = load_quiz(200)
-            if st.session_state.questions:
-                st.session_state.current_step = 0
+    with col1:
+        if st.button("📝 שאלון מלא (200)"):
+            if user_name:
+                st.session_state.user_name = user_name
+                st.session_state.questions = load_quiz(200)
                 st.session_state.answers = []
-                st.session_state.start_time = time.time()
-                st.session_state.page = "quiz"
-                st.rerun()
-        else: st.warning("נא להזין שם משתמש")
-        
-    if st.button("⏱️ מקבץ מהיר (36 שאלות)"):
-        if st.session_state.user_name:
-            st.session_state.questions = load_quiz(36)
-            if st.session_state.questions:
                 st.session_state.current_step = 0
-                st.session_state.answers = []
                 st.session_state.start_time = time.time()
-                st.session_state.page = "quiz"
-                st.rerun()
-        else: st.warning("נא להזין שם משתמש")
-    
-    if st.button("📂 ארכיון וחוות דעת מצטברת"):
-        if st.session_state.user_name:
-            st.session_state.page = "archive"; st.rerun()
-        else: st.warning("נא להזין שם משתמש")
+                st.session_state.page = "quiz"; st.rerun()
+            else: st.warning("נא להזין שם")
 
-# --- דף השאלון ---
+    with col2:
+        if st.button("⏱️ מקבץ מהיר (36)"):
+            if user_name:
+                st.session_state.user_name = user_name
+                st.session_state.questions = load_quiz(36)
+                st.session_state.answers = []
+                st.session_state.current_step = 0
+                st.session_state.start_time = time.time()
+                st.session_state.page = "quiz"; st.rerun()
+            else: st.warning("נא להזין שם")
+
+    st.write("---")
+    if st.button("📂 ארכיון תוצאות"):
+        if user_name:
+            st.session_state.user_name = user_name
+            st.session_state.page = "archive"; st.rerun()
+        else: st.warning("נא להזין שם")
+
+# --- 5. דף השאלון (כולל ניתוח זמנים) ---
 elif st.session_state.page == "quiz":
     q = st.session_state.questions
-    step = st.session_state.current_step
+    idx = st.session_state.current_step
     
-    if step < len(q):
-        st.write(f"נבחן: **{st.session_state.user_name}** | שאלה {step + 1} מתוך {len(q)}")
-        st.progress((step + 1) / len(q))
+    if idx < len(q):
+        st.write(f"שאלה {idx + 1} מתוך {len(q)}")
+        st.progress((idx + 1) / len(q))
+        st.markdown(f"## {q[idx]['q']}")
         
-        st.markdown(f"<h2 style='text-align: right;'>{q[step]['q']}</h2>", unsafe_allow_html=True)
-        
-        # כפתורי 1-5 רחבים (העיצוב נמצא ב-style.css)
         cols = st.columns(5)
         for i, col in enumerate(cols, 1):
-            if col.button(str(i), key=f"btn_{step}_{i}"):
-                elapsed = round(time.time() - st.session_state.start_time, 2)
+            if col.button(str(i), key=f"btn_{idx}_{i}"):
+                # חישוב זמן מענה לשאלה
+                end_time = time.time()
+                duration = round(end_time - st.session_state.start_time, 2)
+                
                 st.session_state.answers.append({
-                    "trait": q[step]['trait'], 
-                    "score": i, 
-                    "time": elapsed
+                    "trait": q[idx]['trait'],
+                    "score": i,
+                    "time_seconds": duration
                 })
                 st.session_state.current_step += 1
-                st.session_state.start_time = time.time()
+                st.session_state.start_time = time.time() # איפוס זמן לשאלה הבאה
                 st.rerun()
     else:
-        st.success("השאלון הושלם בהצלחה!")
-        if st.button("לחץ כאן לקבלת ניתוח AI"):
+        st.success("השאלון הושלם!")
+        if st.button("קבל ניתוח AI"):
             st.session_state.page = "analysis"; st.rerun()
 
-# --- דף ניתוח AI ---
+# --- 6. דף ניתוח AI ---
 elif st.session_state.page == "analysis":
-    st.title("🧐 ניתוח אמינות ואישיות")
-    with st.spinner("ה-AI מנתח את התשובות..."):
+    st.title("🧐 ניתוח AI מקצועי")
+    with st.spinner("מנתח נתונים וזמני תגובה..."):
         try:
-            model_name = get_working_model()
-            model = genai.GenerativeModel(model_name)
-            
+            model = genai.GenerativeModel('gemini-1.5-flash')
             prompt = f"""
-            נתח מועמד לרפואה בשם {st.session_state.user_name}. 
-            להלן תשובותיו למבחן HEXACO (כולל זמן מענה לכל שאלה): {st.session_state.answers}.
-            כתוב חוות דעת מקצועית בעברית על רמת האמינות שלו, יציבותו הרגשית והתאמתו למקצוע הרפואה.
+            נתח מועמד לרפואה בשם {st.session_state.user_name}.
+            תשובות וזמני מענה: {st.session_state.answers}.
+            אנא התייחס בפירוט לעקביות, אמינות (לפי זמני תגובה), ותכונות HEXACO.
+            ענה בעברית בלבד בצורה מקצועית.
             """
+            response = model.generate_content(prompt)
+            analysis_text = response.text
+            st.markdown(analysis_text)
             
-            resp = model.generate_content(prompt)
-            st.markdown(resp.text)
-            
-            # שמירה ל-Firebase
-            if st.session_state.fb_status:
-                st.session_state.db.collection('results').add({
+            # שמירה לארכיון
+            if fb_status:
+                db.collection('results').add({
                     'user': st.session_state.user_name,
                     'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    'analysis': resp.text,
-                    'raw_answers': st.session_state.answers
+                    'analysis': analysis_text,
+                    'answers': st.session_state.answers
                 })
         except Exception as e:
-            st.error(f"שגיאה בניתוח ה-AI: {e}")
-            
-    if st.button("חזרה לתפריט"):
-        st.session_state.page = "home"; st.rerun()
+            st.error(f"שגיאה בניתוח: {e}")
+    
+    if st.button("חזרה לתפריט"): st.session_state.page = "home"; st.rerun()
 
-# --- דף ארכיון ---
+# --- 7. דף ארכיון ---
 elif st.session_state.page == "archive":
-    st.title(f"📂 ארכיון עבור: {st.session_state.user_name}")
-    if st.session_state.fb_status:
-        docs = list(st.session_state.db.collection('results').where('user', '==', st.session_state.user_name).stream())
-        if docs:
-            for doc in docs:
-                data = doc.to_dict()
-                with st.expander(f"מבחן מיום {data['date']}"):
-                    st.write(data['analysis'])
-        else:
-            st.info("לא נמצאו מבחנים קודמים למשתמש זה.")
-    else:
-        st.error("הארכיון אינו מחובר ל-Firebase (יש להגדיר Secrets).")
-        
-    if st.button("חזרה לתפריט"):
-        st.session_state.page = "home"; st.rerun()
+    st.title(f"📂 ארכיון: {st.session_state.user_name}")
+    if fb_status:
+        docs = db.collection('results').where('user', '==', st.session_state.user_name).order_by('date', direction='DESCENDING').stream()
+        found = False
+        for doc in docs:
+            found = True
+            res = doc.to_dict()
+            with st.expander(f"מבחן מיום {res['date']}"):
+                st.write(res['analysis'])
+        if not found: st.info("לא נמצאו מבחנים קודמים.")
+    else: st.error("הארכיון לא מחובר ל-Firebase.")
+    
+    if st.button("חזרה"): st.session_state.page = "home"; st.rerun()
 
-# --- 7. פוטר קבוע ---
 st.markdown('<div class="custom-footer">© כל הזכויות שמורות לניתאי מלכה</div>', unsafe_allow_html=True)
