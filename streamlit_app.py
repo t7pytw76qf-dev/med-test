@@ -30,7 +30,7 @@ db = st.session_state.db
 GEMINI_API_KEY = "AIzaSyDnYMJpJkNcXpOT8TgqPe6ymyvZxnWGCBo"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# --- 3. עיצוב (CSS) ---
+# --- 3. עיצוב (CSS) - RTL וזכויות יוצרים במרכז ---
 st.markdown("""
     <style>
     .main .block-container { direction: rtl; text-align: right; }
@@ -39,24 +39,12 @@ st.markdown("""
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #f8f9fa; color: #333; text-align: center;
         padding: 10px; font-weight: bold; font-size: 14px;
-        border-top: 2px solid #007bff; z-index: 1000; direction: ltr;
+        border-top: 2px solid #007bff; z-index: 1000;
     }
     .main-content { margin-bottom: 80px; }
     h1, h2, h3, p, span { text-align: right; }
     </style>
 """, unsafe_allow_html=True)
-
-def keyboard_handler():
-    st.components.v1.html("""
-        <script>
-        const doc = window.parent.document;
-        doc.addEventListener('keydown', function(e) {
-            if (['1', '2', '3', '4', '5'].includes(e.key)) {
-                const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText === e.key);
-                if (btn) btn.click();
-            }
-        });
-        </script>""", height=0)
 
 def load_quiz(amount):
     try:
@@ -102,11 +90,10 @@ if st.session_state.page == "home":
     if st.button("📂 ארכיון וחוות דעת מצטברת", use_container_width=True):
         if st.session_state.user_name:
             st.session_state.page = "archive"; st.rerun()
-        else: st.warning("נא להזין שם משתמש כדי לצפות בארכיון")
+        else: st.warning("נא להזין שם משתמש")
 
 # --- דף השאלון ---
 elif st.session_state.page == "quiz":
-    keyboard_handler()
     q = st.session_state.questions; step = st.session_state.current_step
     if step < len(q):
         st.write(f"**שאלה {step + 1} מתוך {len(q)}**")
@@ -120,63 +107,65 @@ elif st.session_state.page == "quiz":
                 st.session_state.current_step += 1; st.session_state.start_time = time.time(); st.rerun()
     else:
         st.success("השאלון הושלם!")
-        if st.button("קבל ניתוח אמינות ו-AI", use_container_width=True):
+        if st.button("קבל ניתוח אמינות ו-AI"):
             st.session_state.page = "analysis"; st.rerun()
 
-# --- דף ניתוח (בודד) ---
+# --- דף ניתוח יחיד ---
 elif st.session_state.page == "analysis":
     st.title("🧐 ניתוח אמינות ואישיות")
-    with st.spinner("מנתח נתונים..."):
+    with st.spinner("ה-AI מנתח..."):
         times = [a['time'] for a in st.session_state.answers]
         avg_time = sum(times) / len(times)
+        
+        # פתרון לשגיאת ה-NotFound
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"נתח מועמד לרפואה: {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} ש'. התייחס לאמינות המענה ונתח לפי מודל HEXACO בעברית."
-        resp = model.generate_content(prompt)
-        st.info(f"⏱️ זמן תגובה ממוצע: {avg_time:.2f} שניות לשאלה.")
-        st.markdown(resp.text)
-        if st.session_state.fb_status and db:
-            db.collection('results').add({
-                'user': st.session_state.user_name, 'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
-                'analysis': resp.text, 'avg_time': avg_time, 'raw_answers': st.session_state.answers
-            })
-    if st.button("חזרה לתפריט", use_container_width=True):
+        prompt = f"נתח מועמד לרפואה בשם {st.session_state.user_name}. תשובות: {st.session_state.answers}. זמן ממוצע: {avg_time} שניות. תן חוות דעת מקצועית בעברית על אמינות ואישיות."
+        
+        try:
+            resp = model.generate_content(prompt)
+            st.info(f"⏱️ זמן תגובה ממוצע: {avg_time:.2f} שניות.")
+            st.markdown(resp.text)
+            
+            if st.session_state.fb_status and db:
+                db.collection('results').add({
+                    'user': st.session_state.user_name, 'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                    'analysis': resp.text, 'avg_time': avg_time
+                })
+        except Exception as e:
+            st.error(f"שגיאת AI: {e}")
+
+    if st.button("חזרה לתפריט"):
         st.session_state.page = "home"; st.rerun()
 
 # --- דף ארכיון וחוות דעת מצטברת ---
 elif st.session_state.page == "archive":
-    st.title(f"📂 ארכיון עבור: {st.session_state.user_name}")
+    st.title(f"📂 חוות דעת מצטברת: {st.session_state.user_name}")
     
     if st.session_state.fb_status and db:
-        # שליפת כל המבחנים של המשתמש
-        docs = list(db.collection('results').where('user', '==', st.session_state.user_name).order_by('date').stream())
+        docs = list(db.collection('results').where('user', '==', st.session_state.user_name).stream())
         
         if docs:
-            st.subheader("🤖 חוות דעת מצטברת (AI)")
-            if st.button("צור/עדכן חוות דעת על סמך כל המבחנים", use_container_width=True):
-                with st.spinner("סורק היסטוריה ומגמות..."):
-                    history_text = ""
-                    for d in docs:
-                        data = d.to_dict()
-                        history_text += f"תאריך: {data['date']}, ניתוח: {data['analysis']}\n\n"
-                    
+            if st.button("גבש חוות דעת AI על כל ההיסטוריה", use_container_width=True):
+                with st.spinner("מנתח את כל המבחנים שלך..."):
+                    history = "\n".join([f"תאריך: {d.to_dict()['date']}, ניתוח: {d.to_dict()['analysis']}" for d in docs])
                     model = genai.GenerativeModel('gemini-1.5-flash')
-                    agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. כתוב חוות דעת מצטברת המזהה מגמות, שיפורים ביושרה או עקביות, ונקודות תורפה שחוזרות על עצמן לקראת מבחני מס\"ר:\n\n{history_text}"
+                    agg_prompt = f"להלן היסטוריית המבחנים של {st.session_state.user_name}. ספק חוות דעת מצטברת בעברית על המגמות שלו, עקביות התשובות לאורך זמן והמלצות לשיפור לקראת מבחני מס\"ר:\n\n{history}"
                     agg_resp = model.generate_content(agg_prompt)
-                    st.success("חוות דעת גובשה בהצלחה:")
-                    st.markdown(agg_resp.text)
+                    st.markdown("### 🤖 חוות דעת תקופתית")
+                    st.info(agg_resp.text)
                     st.divider()
 
             st.subheader("📜 מבחנים קודמים")
             for doc in docs:
                 d = doc.to_dict()
-                with st.expander(f"מבחן מיום {d['date']} (זמן ממוצע: {d.get('avg_time', 0):.2f} ש')"):
+                with st.expander(f"מבחן מיום {d['date']}"):
                     st.write(d['analysis'])
         else:
-            st.info("לא נמצאו מבחנים קודמים למשתמש זה.")
+            st.info("לא נמצאו מבחנים קודמים.")
     else:
-        st.error("הארכיון לא זמין - בדוק חיבור ל-Firebase.")
+        st.error("הארכיון לא זמין.")
     
-    if st.button("חזרה לתפריט", use_container_width=True):
+    if st.button("חזרה"):
         st.session_state.page = "home"; st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
