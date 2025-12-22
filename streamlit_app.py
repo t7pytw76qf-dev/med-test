@@ -106,7 +106,24 @@ def generate_analysis(answers):
                 continue
     return "שגיאה במכסת ה-AI. נסה שוב בעוד דקה.", None
 
-# --- 5. ניהול דפים ---
+# --- 5. פונקציית טעינת נתונים חכמה ---
+def load_questions():
+    # רשימת נתיבים אפשריים לחיפוש הקובץ בשרת
+    paths = [
+        "questions.csv",
+        "med-test/questions.csv",
+        "/mount/src/med-test/questions.csv",
+        "./questions.csv"
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                return pd.read_csv(p)
+            except:
+                continue
+    return None
+
+# --- 6. ניהול דפים ---
 if 'page' not in st.session_state: st.session_state.page = "home"
 if 'user_name' not in st.session_state: st.session_state.user_name = ""
 
@@ -119,28 +136,31 @@ if st.session_state.page == "home":
     with col1:
         if st.button("📝 שאלון מלא (200)"):
             if st.session_state.user_name:
-                try:
-                    st.session_state.questions = pd.read_csv("questions.csv").to_dict('records')
+                df = load_questions()
+                if df is not None:
+                    st.session_state.questions = df.to_dict('records')
                     st.session_state.current_step = 0
                     st.session_state.answers = []
                     st.session_state.start_time = time.time()
                     st.session_state.page = "quiz"
                     st.rerun()
-                except: st.error("קובץ שאלות לא נמצא!")
+                else:
+                    st.error("קובץ questions.csv לא נמצא בשרת. וודא שהוא בתיקייה הראשית ב-GitHub.")
             else: st.error("נא להזין שם!")
     
     with col2:
         if st.button("⏱️ מקבץ מהיר (36)"):
             if st.session_state.user_name:
-                try:
-                    df = pd.read_csv("questions.csv")
+                df = load_questions()
+                if df is not None:
                     st.session_state.questions = df.sample(n=min(36, len(df))).to_dict('records')
                     st.session_state.current_step = 0
                     st.session_state.answers = []
                     st.session_state.start_time = time.time()
                     st.session_state.page = "quiz"
                     st.rerun()
-                except: st.error("קובץ שאלות לא נמצא!")
+                else:
+                    st.error("קובץ questions.csv לא נמצא בשרת.")
             else: st.error("נא להזין שם!")
 
     st.write("---")
