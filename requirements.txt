@@ -1,7 +1,0 @@
-streamlit
-pandas
-numpy
-plotly
-fpdf2
-google-generativeai
-firebase-admin
