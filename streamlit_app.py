@@ -1,23 +1,41 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
 import google.generativeai as genai
-import random
 import time
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-from fpdf import FPDF
 
-# --- 1. הגדרות דף ועיצוב CSS מתקדם (כולל Hover ו-Focus) ---
-st.set_page_config(page_title="מערכת HEXACO - ניתוח AI", layout="centered")
+# --- 1. הגדרות דמות הרופא (טווחים וצבעי רמזור) ---
+DOCTOR_PROFILE = {
+    "Honesty-Humility": {"min": 4.0, "max": 5.0, "label": "יושרה וצניעות"},
+    "Emotionality": {"min": 2.2, "max": 3.8, "label": "יציבות רגשית"},
+    "Extraversion": {"min": 3.0, "max": 5.0, "label": "מוחצנות חברתית"},
+    "Agreeableness": {"min": 3.8, "max": 5.0, "label": "נעימות וסבלנות"},
+    "Conscientiousness": {"min": 4.2, "max": 5.0, "label": "מצפוניות וסדר"},
+    "Openness to Experience": {"min": 3.0, "max": 5.0, "label": "פתיחות ללמידה"}
+}
+
+def get_status_color(trait, score):
+    target = DOCTOR_PROFILE[trait]
+    if target["min"] <= score <= target["max"]:
+        return "#2ecc71"  # ירוק
+    elif target["min"] - 0.5 <= score <= target["max"] + 0.5:
+        return "#f1c40f"  # צהוב
+    else:
+        return "#e74c3c"  # אדום
+
+# --- 2. עיצוב CSS מתקדם (RTL + אפקטים לכפתורים) ---
+st.set_page_config(page_title="HEXACO Medical Tracker", layout="wide")
 
 st.markdown("""
     <style>
-        /* יישור RTL */
         .main .block-container { direction: rtl !important; text-align: right !important; }
         
-        /* עיצוב כפתורי הדירוג */
+        /* עיצוב כפתורי השאלון */
         div.stButton > button {
             width: 100% !important;
             height: 4.5em !important;
@@ -27,47 +45,33 @@ st.markdown("""
             border: 2px solid #4A90E2 !important;
             background-color: white !important;
             color: #4A90E2 !important;
-            /* אנימציה חלקה למעבר עכבר ולחיצה */
-            transition: background-color 0.3s ease, color 0.3s ease, transform 0.1s !important;
+            transition: all 0.3s ease-in-out !important;
             margin-bottom: 10px !important;
         }
 
-        /* מצב מעבר עכבר (Hover) */
+        /* Hover - מעבר עכבר */
         div.stButton > button:hover {
             background-color: #4A90E2 !important;
             color: white !important;
-            border-color: #225796 !important;
+            box-shadow: 0 6px 12px rgba(74, 144, 226, 0.3) !important;
+            transform: translateY(-2px);
         }
 
-        /* מצב לחיצה ופוקוס (נשאר כחול) */
+        /* Active/Focus - לחיצה */
         div.stButton > button:active, div.stButton > button:focus {
-            background-color: #225796 !important;
+            background-color: #1a4373 !important;
             color: white !important;
-            border: 2px solid #1a4373 !important;
-            transform: scale(0.98) !important;
+            border-color: #1a4373 !important;
+            transform: scale(0.95) !important;
         }
 
-        /* פוטר קבוע */
-        .custom-footer { 
-            position: fixed; left: 0; bottom: 0; width: 100%; 
-            background-color: white; text-align: center; padding: 10px; 
-            font-weight: bold; border-top: 1px solid #eaeaea; z-index: 999; 
-        }
+        /* עיצוב טבלאות */
+        .stTable { direction: rtl !important; }
+        
+        /* כותרות */
+        h1, h2, h3 { color: #1a4373; }
     </style>
     """, unsafe_allow_html=True)
-
-# --- 2. פונקציית יצירת PDF ---
-def create_pdf(text, user_name):
-    try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=f"HEXACO AI Analysis - {user_name}", ln=True, align='C')
-        pdf.ln(10)
-        clean_text = text.encode('ascii', 'ignore').decode('ascii')
-        pdf.multi_cell(0, 10, txt=clean_text)
-        return pdf.output(dest='S').encode('latin-1')
-    except: return b""
 
 # --- 3. אתחול Firebase ---
 if "firebase" in st.secrets and not firebase_admin._apps:
@@ -79,80 +83,94 @@ if "firebase" in st.secrets and not firebase_admin._apps:
     except: pass
 db = firestore.client() if firebase_admin._apps else None
 
-# --- 4. מנגנון AI חסין עומסים ---
-def generate_analysis(answers):
-    # סבב מפתחות API (מומלץ להוסיף GEMINI_API_KEY_2 ב-Secrets)
-    api_keys = [st.secrets.get("GEMINI_API_KEY"), st.secrets.get("GEMINI_API_KEY_2")]
-    api_keys = [k for k in api_keys if k]
-    
-    # ניסיון מודלים שונים כדי לעקוף מכסות
-    models_to_try = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro"]
-    
-    prompt = f"Analyze the HEXACO test for {st.session_state.user_name}. Results: {str(answers)[:2000]}. Provide a professional Hebrew report."
+# --- 4. פונקציות נתונים וגרפים ---
+def get_history(user_name):
+    if not db: return []
+    try:
+        docs = db.collection('results').where('user', '==', user_name).order_by('timestamp').stream()
+        return [d.to_dict() for d in docs]
+    except: return []
 
-    for key in api_keys:
-        genai.configure(api_key=key)
-        for m_name in models_to_try:
-            try:
-                model = genai.GenerativeModel(m_name)
-                response = model.generate_content(prompt)
-                if response.text: return response.text
-            except: continue
-    return "שגיאה: מכסת ה-AI נוצלה. אנא המתן דקה ונסה שוב."
+def plot_traffic_chart(current_avgs, history):
+    traits = list(DOCTOR_PROFILE.keys())
+    labels = [DOCTOR_PROFILE[t]['label'] for t in traits]
+    scores = [current_avgs.get(t, 0) for t in traits]
+    colors = [get_status_color(t, current_avgs.get(t, 0)) for t in traits]
+    
+    fig = go.Figure()
+    # עמודות מבחן נוכחי
+    fig.add_trace(go.Bar(name='נוכחי', x=labels, y=scores, marker_color=colors, text=scores, textposition='auto'))
+    
+    # נקודות ממוצע עבר
+    if history:
+        hist_scores = []
+        for t in traits:
+            vals = [h['averages'].get(t, 0) for h in history if 'averages' in h]
+            hist_scores.append(round(np.mean(vals), 2) if vals else 0)
+        fig.add_trace(go.Scatter(name='ממוצע עבר (X)', x=labels, y=hist_scores, mode='markers', marker=dict(color='black', size=14, symbol='x')))
 
-# --- 5. פונקציית טעינת קובץ שאלות ---
-def load_questions():
-    paths = ["questions.csv", "/mount/src/med-test/questions.csv", "./questions.csv"]
-    for p in paths:
-        if os.path.exists(p):
-            try: return pd.read_csv(p)
-            except: continue
-    return None
+    # קווי טווח יעד
+    for i, t in enumerate(traits):
+        fig.add_shape(type="line", x0=i-0.3, x1=i+0.3, y0=DOCTOR_PROFILE[t]["min"], y1=DOCTOR_PROFILE[t]["min"], line=dict(color="black", width=2, dash="dash"))
+        fig.add_shape(type="line", x0=i-0.3, x1=i+0.3, y0=DOCTOR_PROFILE[t]["max"], y1=DOCTOR_PROFILE[t]["max"], line=dict(color="black", width=2, dash="dash"))
+
+    fig.update_layout(title="ניתוח רמזור מול יעדי רפואה וממוצע עבר", yaxis=dict(range=[1, 5]), barmode='group', template="plotly_white")
+    return fig
+
+# --- 5. מנוע AI ---
+def generate_ai_analysis(user_name, current_avgs, history, consistency_warnings):
+    api_key = st.secrets.get("GEMINI_API_KEY")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    
+    hist_summary = f"למועמד יש {len(history)} מבחנים קודמים במאגר." if history else "זהו המבחן הראשון."
+    prompt = f"""
+    נתח מועמד לרפואה: {user_name}. 
+    ציונים נוכחיים: {current_avgs}. 
+    אזהרות עקביות: {consistency_warnings}.
+    היסטוריה: {hist_summary}.
+
+    כתוב דוח בעברית הכולל:
+    1. דירוג התכונות מהחזקה לחלשה ביחס לרופא אידיאלי.
+    2. ניתוח אמינות: האם התשובות עקביות או שיש חשד לזיוף?
+    3. יתרונות וחסרונות: 3 חוזקות ו-3 נקודות תורפה לשיפור.
+    4. ניתוח מגמה: האם יש שיפור לעומת מבחני עבר?
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except: return "הניתוח אינו זמין כרגע - בדוק את חיבור ה-API."
 
 # --- 6. ניהול דפים ---
 if 'page' not in st.session_state: st.session_state.page = "home"
-if 'user_name' not in st.session_state: st.session_state.user_name = ""
 
-# דף הבית
 if st.session_state.page == "home":
-    st.title("🏥 מערכת HEXACO - ניתוח AI")
-    st.session_state.user_name = st.text_input("שם מועמד:", value=st.session_state.user_name)
+    st.title("🏥 מערכת HEXACO למעקב ומיוני רפואה")
+    st.write("ברוך הבא למערכת הניתוח המצטברת. הזן את שמך כדי להתחיל או לראות התקדמות.")
+    st.session_state.user_name = st.text_input("שם מלא (לזיהוי במערכת):")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📝 שאלון מלא"):
-            df = load_questions()
-            if df is not None and st.session_state.user_name:
+        if st.button("📝 התחל שאלון מלא"):
+            if st.session_state.user_name:
+                df = pd.read_csv("questions.csv")
                 st.session_state.questions = df.to_dict('records')
                 st.session_state.current_step = 0; st.session_state.answers = []
                 st.session_state.start_time = time.time(); st.session_state.page = "quiz"; st.rerun()
-            else: st.error("הזן שם או וודא שקובץ questions.csv קיים.")
-    
     with col2:
-        if st.button("⏱️ מקבץ מהיר (36)"):
-            df = load_questions()
-            if df is not None and st.session_state.user_name:
-                st.session_state.questions = df.sample(n=min(36, len(df))).to_dict('records')
-                st.session_state.current_step = 0; st.session_state.answers = []
-                st.session_state.start_time = time.time(); st.session_state.page = "quiz"; st.rerun()
-            else: st.error("הזן שם או וודא שקובץ questions.csv קיים.")
+        if st.button("📂 צפה בהיסטוריית מבחנים"):
+            if st.session_state.user_name: st.session_state.page = "analysis"; st.rerun()
 
-    if st.button("📂 ארכיון תוצאות"):
-        if st.session_state.user_name: st.session_state.page = "archive"; st.rerun()
-
-# דף השאלון
 elif st.session_state.page == "quiz":
-    q = st.session_state.questions
-    idx = st.session_state.current_step
-    
+    q, idx = st.session_state.questions, st.session_state.current_step
     if idx < len(q):
-        st.write(f"שאלה {idx + 1} מתוך {len(q)}")
+        st.subheader(f"שאלה {idx + 1} מתוך {len(q)}")
         st.progress((idx + 1) / len(q))
         st.markdown(f"### {q[idx]['q']}")
         
         cols = st.columns(5)
         for val, col in enumerate(cols, 1):
-            if col.button(str(val), key=f"btn_{idx}_{val}"):
+            if col.button(str(val), key=f"q{idx}_{val}"):
                 st.session_state.answers.append({
                     "trait": q[idx]['trait'], 
                     "score": val, 
@@ -162,48 +180,80 @@ elif st.session_state.page == "quiz":
                 st.session_state.start_time = time.time()
                 st.rerun()
     else:
-        st.success("השאלון הושלם!")
-        if st.button("🚀 הפק ניתוח AI"):
+        st.success("השאלון הסתיים בהצלחה!")
+        if st.button("🚀 הפק דוח רמזור וניתוח מגמות"):
             st.session_state.page = "analysis"; st.rerun()
 
-# דף ניתוח
 elif st.session_state.page == "analysis":
-    st.title("🧐 ניתוח AI סופי")
+    st.title(f"📊 דוח ביצועים ומגמות: {st.session_state.user_name}")
+    
     if 'final_analysis' not in st.session_state:
-        with st.spinner("מנתח נתונים..."):
-            res = generate_analysis(st.session_state.answers)
-            st.session_state.final_analysis = res
-            if db and "שגיאה" not in res:
-                try:
+        with st.spinner("שואב נתונים היסטוריים ומנתח עקביות..."):
+            # חישוב ממוצעים נוכחיים (אם יש תשובות חדשות)
+            if 'answers' in st.session_state and st.session_state.answers:
+                trait_scores = {}
+                consistency_warnings = []
+                for a in st.session_state.answers:
+                    t = a['trait']
+                    if t not in trait_scores: trait_scores[t] = []
+                    trait_scores[t].append(a['score'])
+                
+                # בדיקת עקביות (סטיית תקן)
+                for t, scores in trait_scores.items():
+                    if len(scores) > 1 and np.std(scores) > 1.4:
+                        consistency_warnings.append(DOCTOR_PROFILE[t]['label'])
+
+                st.session_state.current_avgs = {k: round(np.mean(v), 2) for k, v in trait_scores.items()}
+                st.session_state.warnings = consistency_warnings
+                
+                if db:
                     db.collection('results').add({
                         'user': st.session_state.user_name,
-                        'date': datetime.now().strftime("%d/%m/%Y %H:%M"),
-                        'analysis': res
+                        'averages': st.session_state.current_avgs,
+                        'timestamp': datetime.now()
                     })
-                except: pass
-    
-    st.markdown(st.session_state.final_analysis)
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        pdf_bytes = create_pdf(st.session_state.final_analysis, st.session_state.user_name)
-        if pdf_bytes: st.download_button("📥 הורד PDF", data=pdf_bytes, file_name="analysis.pdf")
-    with col_b:
-        if st.button("חזרה לתפריט"):
-            if 'final_analysis' in st.session_state: del st.session_state.final_analysis
-            st.session_state.page = "home"; st.rerun()
+            
+            # שליפת היסטוריה
+            st.session_state.history = get_history(st.session_state.user_name)
+            # ניתוח AI
+            st.session_state.final_analysis = generate_ai_analysis(
+                st.session_state.user_name, 
+                st.session_state.current_avgs, 
+                st.session_state.history,
+                st.session_state.get('warnings', [])
+            )
 
-# דף ארכיון
-elif st.session_state.page == "archive":
-    st.title(f"📂 ארכיון: {st.session_state.user_name}")
-    if db:
-        try:
-            docs = db.collection('results').where('user', '==', st.session_state.user_name).stream()
-            for doc in docs:
-                d = doc.to_dict()
-                with st.expander(f"מבחן מ-{d['date']}"): st.write(d['analysis'])
-        except: st.error("שגיאת גישה לארכיון.")
-    
-    if st.button("חזרה"): st.session_state.page = "home"; st.rerun()
+    # 1. טבלת דירוג רמזור
+    st.subheader("📌 סטטוס נוכחי ודירוג")
+    rank_data = []
+    for t, s in st.session_state.current_avgs.items():
+        color = get_status_color(t, s)
+        emoji = "✅" if color == "#2ecc71" else ("⚠️" if color == "#f1c40f" else "❌")
+        rank_data.append({
+            "תכונה": DOCTOR_PROFILE[t]['label'], 
+            "ציון": s, 
+            "טווח יעד": f"{DOCTOR_PROFILE[t]['min']}-{DOCTOR_PROFILE[t]['max']}", 
+            "סטטוס": emoji
+        })
+    st.table(pd.DataFrame(rank_data).sort_values("ציון", ascending=False))
 
-st.markdown('<div class="custom-footer">© כל הזכויות שמורות לניתאי מלכה</div>', unsafe_allow_html=True)
+    # 2. גרף רמזור + היסטוריה
+    st.plotly_chart(plot_traffic_chart(st.session_state.current_avgs, st.session_state.history), use_container_width=True)
+
+    # 3. ניתוח AI
+    st.markdown("---")
+    st.subheader("💡 ניתוח AI, חוזקות ותכנית שיפור")
+    st.write(st.session_state.final_analysis)
+
+    # 4. טיפים לשיפור
+    with st.expander("🛠️ טיפים קליניים לשיפור הציון"):
+        st.info("**יושרה:** הימנע מקיצוניות בשאלות על כבוד או ממון. מחפשים רופא צנוע אך יציב.")
+        st.info("**נעימות:** במיון מחפשים 'Team Player'. אם הציון נמוך, בדוק אם ענית בקיצוניות על שאלות של עמידה על עקרונות.")
+        st.info("**מצפוניות:** זו התכונה הכי חשובה לבטיחות המטופל. אם הציון נמוך, עליך להראות יותר דייקנות בפרטים.")
+
+    if st.button("🏠 חזרה למסך הבית"):
+        for key in ['final_analysis', 'current_avgs', 'history', 'warnings', 'answers']:
+            if key in st.session_state: del st.session_state[key]
+        st.session_state.page = "home"; st.rerun()
+
+st.markdown('<div style="text-align:center; padding:20px; color:gray;">© כל הזכויות שמורות לניתאי מלכה - מערכת הכנה למיוני רפואה 2025</div>', unsafe_allow_html=True)
