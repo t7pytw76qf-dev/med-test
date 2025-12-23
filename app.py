@@ -106,20 +106,67 @@ elif st.session_state.step == 'QUIZ':
 
 elif st.session_state.step == 'RESULTS':
     st.title("📊 דוח ניתוח אישיות ואמינות")
-    df = pd.DataFrame(st.session_state.responses)
     
-    # חישוב ממוצעים לכל תכונה (רמזור)
-    st.subheader("סיכום מדדי אישיות")
-    trait_scores = df.groupby('trait')['final_score'].mean()
-    st.bar_chart(trait_scores)
+    # 1. עיבוד הנתונים באמצעות logic.py
+    from logic import process_results, get_profile_match, analyze_consistency
     
-    # בדיקת אמינות זמנים
-    st.subheader("בדיקת אמינות ועקביות")
-    suspicious = df[df['time_taken'] < 1.5]
-    if not suspicious.empty:
-        st.error(f"שים לב: ענית על {len(suspicious)} שאלות מהר מדי. זה פוגע במדד האמינות.")
+    df_raw, summary_df = process_results(st.session_state.responses)
+    trait_scores = summary_df.set_index('trait')['final_score'].to_dict()
+    
+    # 2. תצוגת רמזורים (Profile Match)
+    st.subheader("🎯 התאמה לפרופיל רופא (מודל רמזור)")
+    status_map = get_profile_match(trait_scores)
+    
+    cols = st.columns(len(status_map))
+    for i, (trait, status) in enumerate(status_map.items()):
+        with cols[i]:
+            st.metric(label=trait, value=f"{trait_scores[trait]:.2f}", delta=status, delta_color="normal")
 
-    if st.button("הפק ניתוח AI עמוק (Gemini)"):
-        with st.spinner("מנתח נתונים..."):
-            report = get_ai_analysis(df.to_string())
-            st.markdown(report)
+    st.divider()
+
+    # 3. בדיקת אמינות ועקביות
+    st.subheader("🛡️ מדדי אמינות ועקביות")
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.write("**בדיקת זמני תגובה:**")
+        fast_count = len(df_raw[df_raw['time_status'] == "מהיר מדי"])
+        slow_count = len(df_raw[df_raw['time_status'] == "איטי מדי"])
+        
+        if fast_count > 0:
+            st.warning(f"⚠️ ענית על {fast_count} שאלות מהר מדי (פחות מ-1.5 שניות).")
+        if slow_count > 0:
+            st.info(f"ℹ️ ענית על {slow_count} שאלות לאט מהרגיל.")
+        if fast_count == 0 and slow_count == 0:
+            st.success("✅ קצב התשובות תקין ואמין.")
+
+    with col_b:
+        st.write("**בדיקת עקביות פנימית:**")
+        inconsistencies = analyze_consistency(df_raw)
+        if inconsistencies:
+            for alert in inconsistencies:
+                st.error(f"❌ {alert}")
+        else:
+            st.success("✅ לא נמצאו סתירות מהותיות בתשובות.")
+
+    st.divider()
+
+    # 4. ניתוח AI עמוק
+    st.subheader("🤖 ניתוח עומק מבוסס AI")
+    if st.button("צור ניתוח Gemini מפורט"):
+        with st.spinner("ה-AI סורק את הפרופיל ומחפש דפוסים..."):
+            # הכנת נתונים ל-AI: רק מה שחשוב
+            ai_data = df_raw[['trait', 'final_score', 'time_taken', 'time_status']].to_string()
+            report = get_ai_analysis(ai_data)
+            
+            st.markdown("---")
+            st.markdown("### חוות דעת מומחה מערכת:")
+            st.write(report)
+            
+    # כפתור חזרה
+    if st.button("חזרה למסך הבית"):
+        st.session_state.step = 'HOME'
+        st.session_state.responses = []
+        st.session_state.current_q = 0
+        st.rerun()
